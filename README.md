@@ -203,8 +203,9 @@ Citation recommandée :
 
 > Minko, B. A. J. (2026). *Agrégation bayésienne contextuelle de modèles de
 > mortalité : code et résultats reproductibles*. Dépôt GitHub, version 1.0.0.
+> https://github.com/bminko/stacking-bayesien-mortalite
 
 Les mêmes métadonnées sont fournies dans [`CITATION.cff`](CITATION.cff), afin
 que GitHub et les gestionnaires bibliographiques puissent proposer directement
-la référence du logiciel. L’URL définitive du dépôt doit être ajoutée ici et
-dans le mémoire après sa création ; aucune URL n’a été inventée.
+la référence du logiciel. Le dépôt public est accessible à l’adresse
+https://github.com/bminko/stacking-bayesien-mortalite.
