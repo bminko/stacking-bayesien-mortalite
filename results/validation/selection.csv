@@ -1,0 +1,11 @@
+"scenario","repetition","main_configuration","prior_retry","weight_rmse","selection_reason","selection_target","diagnostic_stress_score","initial_max_rhat","initial_min_ess_bulk","initial_min_ess_tail","initial_divergences","initial_max_treedepth_hits","initial_min_ebfmi","initial_chain_stuck","initial_valid"
+"constant_weights",6,"complete",TRUE,0.0479502875304809,"relance_precedente_et_diagnostic_defavorable",,5.9,1.01301323904224,333.215683779083,210.808961504444,0,0,0.741899274204905,FALSE,FALSE
+"constant_weights",25,"legere",FALSE,0.0790278054170574,"couverture_rmse_q80",0.8,3,1.00709655186474,704.983268146388,508.414857199608,0,0,0.773328792096228,FALSE,TRUE
+"horizon_only",4,"complete",TRUE,0.0737126026056244,"relance_precedente_et_diagnostic_defavorable",,4.93333333333333,1.00918537884123,535.580943850281,230.405819648757,0,0,0.878140470094291,FALSE,FALSE
+"horizon_only",7,"legere",FALSE,0.105126217614805,"couverture_rmse_q80",0.8,1.96666666666667,1.00390253477056,683.376301237322,587.425286960542,0,0,0.772141754013843,FALSE,TRUE
+"age_horizon",19,"complete",TRUE,0.146643729308539,"relance_precedente_et_diagnostic_defavorable",,5.53333333333333,1.00711576069773,448.74084465269,195.284852645909,0,0,0.68120275268173,FALSE,FALSE
+"age_horizon",12,"legere",FALSE,0.103620956378255,"couverture_rmse_q20",0.2,0.933333333333333,1.00699658806867,1046.27690717022,707.967083851044,0,0,0.857175332801825,FALSE,TRUE
+"low_information",16,"legere",FALSE,0.0409821629066094,"diagnostic_numerique_defavorable",,3.26666666666667,1.00781873719257,1086.20036255872,712.374344323333,0,0,0.854367700372655,FALSE,TRUE
+"low_information",30,"legere",FALSE,0.0386328074439182,"couverture_rmse_q20",0.2,2.3,1.00590597121512,1229.1981776814,728.69346011163,0,0,0.914110712938508,FALSE,TRUE
+"low_information",11,"legere",FALSE,0.0435776868185105,"couverture_rmse_q50",0.5,1.53333333333333,1.00605911831639,1490.9490154906,755.799455890087,0,0,0.939790240500041,FALSE,TRUE
+"low_information",26,"legere",FALSE,0.0526646497593129,"couverture_rmse_q80",0.8,1.93333333333333,1.00519091994696,1256.77497226267,763.119480548003,0,0,0.914522919742444,FALSE,TRUE

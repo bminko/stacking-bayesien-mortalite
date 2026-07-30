@@ -1,0 +1,12 @@
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.rds binary
+
+*.R text
+*.stan text
+*.md text
+*.csv text
+*.cff text
+*.txt text

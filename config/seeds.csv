@@ -1,0 +1,7 @@
+scope,value,derivation
+master,26052026,Configuration centrale
+protocol,stan_independent_repetitions_v3,Inclus dans chaque graine dérivée
+pilot,derived,stable_seed(master|protocol|pilot|scenario|rep_NNN|part)
+main,derived,stable_seed(master|protocol|main|scenario|rep_NNN|part)
+validation,derived,stable_seed(master|protocol|validation|scenario|rep_NNN|part)
+scenarios,"constant_weights|horizon_only|age_horizon|low_information",Ordre fixé dans config/config.R

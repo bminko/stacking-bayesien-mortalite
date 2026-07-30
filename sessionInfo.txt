@@ -1,0 +1,24 @@
+Environnement de l'étude de simulation finale
+================================================
+Système d'exploitation : Windows 11 Famille 64 bits
+Plateforme : Windows x86_64-mingw32
+R : 4.5.3
+rstan : 2.32.7
+Stan / stanc : 2.32.2
+posterior : 1.7.0
+bridgesampling : 1.2-1
+ggplot2 : 4.0.3
+
+Matériel
+--------
+Lenovo 82BH
+Intel Core i5-1135G7, 2,40 GHz
+4 cœurs physiques, 8 processeurs logiques
+16 Go de mémoire vive
+
+Remarque
+--------
+Ces informations proviennent du rapport technique et des journaux
+d'installation archivés. Elles décrivent l'étude de simulation Stan finale.
+Le pipeline empirique initial a utilisé un exécutable R 4.3.1 ; cette
+différence est documentée dans les résultats du chapitre 3.

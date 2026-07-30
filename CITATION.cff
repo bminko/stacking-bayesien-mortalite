@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "Si vous utilisez ce code ou ses résultats, veuillez citer ce dépôt."
+title: "Agrégation bayésienne contextuelle de modèles de mortalité : code et résultats reproductibles"
+type: software
+authors:
+  - family-names: "Minko"
+    given-names: "Benjamin André Junior"
+version: "1.0.0"
+date-released: "2026-07-30"
+license: "MIT"

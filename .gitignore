@@ -1,0 +1,51 @@
+# Données HMD brutes
+data/raw/
+death.txt
+exposure.txt
+
+# Configuration locale
+config/paths_local.R
+.Renviron
+.Rprofile
+.Rhistory
+
+# Bibliothèque et état R
+R/library/
+renv/library/
+renv/staging/
+.Rproj.user/
+*.RData
+*.rds
+*.RDS
+
+# Sorties volumineuses ou régénérables
+results/full/
+results/smoke/
+results/**/MCMC_draws/
+results/**/repetitions/
+results/**/pilot_repetitions/
+results/**/weights_by_repetition.csv
+*.tmp
+*.log
+
+# Compilation Stan et LaTeX
+*.exe
+*.o
+*.obj
+*.hpp.gch
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.lof
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+# Système et éditeurs
+Thumbs.db
+.DS_Store
+*.swp
+*~
