@@ -5,6 +5,12 @@
 # diagnostics sont sauvegardes repetition par repetition afin de permettre
 # une reprise sans recommencer les ajustements deja valides.
 
+simulation_output_root <- function(cfg) {
+  subdir <- cfg$simulation$output_subdir %||% ""
+  if (!nzchar(subdir)) return(cfg$paths$simulation)
+  file.path(cfg$paths$simulation, subdir)
+}
+
 simulation_grid <- function(cfg) {
   grid <- expand.grid(
     age = cfg$age_min:cfg$age_max,
@@ -13,19 +19,320 @@ simulation_grid <- function(cfg) {
   grid[order(grid$horizon, grid$age), , drop = FALSE]
 }
 
-simulation_candidate_log_rates <- function(
-    age, horizon, models, signal_scale = 1) {
-  centered_age <- (age - 70) / 20
-  centered_horizon <- (horizon - 5.5) / 4.5
-  base <- -5.4 + 1.45 * centered_age - 0.10 * centered_horizon
-  deviations <- c(
-    lc = -0.08 * centered_age * centered_horizon,
-    rh = 0.18 * sin((age - 50) / 7) + 0.10 * centered_horizon,
-    apc = -0.12 * centered_age^2 + 0.04 * centered_horizon,
-    cbd = 0.18 * centered_age * centered_horizon,
-    m6 = 0.12 * (centered_age > 0) - 0.08 * centered_horizon^2
+simulation_reference_dir <- function(cfg) {
+  file.path(simulation_output_root(cfg), "reference_hmd_1970_2015")
+}
+
+simulation_reference_path <- function(cfg) {
+  file.path(
+    simulation_reference_dir(cfg),
+    "reference_predictive_distributions.rds"
   )
-  (base + signal_scale * deviations)[models]
+}
+
+simulation_reference_cache_key <- function(cfg) {
+  context <- cfg$simulation$reference_fit_context
+  fit_metadata <- file.path(
+    cfg$paths$fits, context, cfg$models, "cache_metadata.rds"
+  )
+  input_paths <- c(
+    cfg$paths$deaths,
+    cfg$paths$exposure,
+    file.path(cfg$root, "R", "data.R"),
+    file.path(cfg$root, "R", "forecasting.R"),
+    file.path(cfg$root, "R", "simulation_study.R"),
+    fit_metadata
+  )
+  missing <- input_paths[!file.exists(input_paths)]
+  assert_true(
+    !length(missing),
+    paste(
+      "Calibration HMD impossible, fichiers absents :",
+      paste(missing, collapse = ", ")
+    )
+  )
+  paste(
+    cfg$simulation$protocol_version,
+    cfg$sex,
+    cfg$year_start,
+    cfg$simulation$calibration_end,
+    cfg$age_min,
+    cfg$age_max,
+    paste(cfg$lfo_horizons, collapse = ","),
+    cfg$simulation$exposure_reference_year,
+    cfg$simulation$reference_draws,
+    paste(unname(tools::md5sum(input_paths)), collapse = ":"),
+    sep = "|"
+  )
+}
+
+simulation_reference_target <- function(processed, cfg) {
+  grid <- simulation_grid(cfg)
+  reference_year <- cfg$simulation$exposure_reference_year
+  exposure_profile <- processed$long[
+    processed$long$year == reference_year,
+    c("age", "exposure"),
+    drop = FALSE
+  ]
+  exposure_index <- match(grid$age, exposure_profile$age)
+  assert_true(
+    !anyNA(exposure_index),
+    paste("Profil d'exposition HMD incomplet pour", reference_year)
+  )
+  exposure <- exposure_profile$exposure[exposure_index]
+  assert_true(
+    all(is.finite(exposure) & exposure > 0),
+    "Les expositions HMD de reference doivent etre positives et finies."
+  )
+  data.frame(
+    year = as.integer(cfg$simulation$calibration_end + grid$horizon),
+    age = as.integer(grid$age),
+    deaths = NA_real_,
+    exposure = as.numeric(exposure),
+    origin = as.integer(cfg$simulation$calibration_end),
+    horizon = as.integer(grid$horizon)
+  )
+}
+
+read_simulation_reference_fit <- function(model, cfg, context) {
+  fit_dir <- file.path(cfg$paths$fits, context, model)
+  fit_path <- file.path(fit_dir, "fit.rds")
+  metadata_path <- file.path(fit_dir, "cache_metadata.rds")
+  diagnostics_path <- file.path(fit_dir, "diagnostics_overview.csv")
+  required <- c(fit_path, metadata_path, diagnostics_path)
+  assert_true(
+    all(file.exists(required)),
+    paste("Ajustement HMD 1970-2015 incomplet pour", model)
+  )
+  metadata <- readRDS(metadata_path)
+  stored_stan_md5 <- strsplit(metadata$key, ":", fixed = TRUE)[[1L]][1L]
+  current_stan_md5 <- unname(tools::md5sum(model_stan_file(model, cfg)))
+  assert_true(
+    identical(stored_stan_md5, current_stan_md5),
+    paste(
+      "Le code Stan a change depuis l'ajustement HMD de", model,
+      ": une reestimation est necessaire."
+    )
+  )
+  diagnostics <- utils::read.csv(
+    diagnostics_path, stringsAsFactors = FALSE
+  )
+  assert_true(
+    nrow(diagnostics) == 1L && isTRUE(diagnostics$pass[[1L]]) &&
+      diagnostics$divergences[[1L]] == 0 &&
+      diagnostics$max_treedepth_hits[[1L]] == 0,
+    paste("Ajustement HMD non convergent pour", model)
+  )
+  fit <- readRDS(fit_path)
+  assert_true(is_rstan_fit(fit), paste("Objet Stan invalide pour", model))
+  fit
+}
+
+build_simulation_reference <- function(cfg) {
+  processed_path <- file.path(
+    cfg$paths$processed, "mortality_data.rds"
+  )
+  assert_true(
+    file.exists(processed_path),
+    paste("Donnees HMD preparees absentes :", processed_path)
+  )
+  processed <- readRDS(processed_path)
+  freshly_prepared <- prepare_hmd_data(cfg)
+  assert_true(
+    identical(processed$long, freshly_prepared$long),
+    paste(
+      "Les donnees preparees ne correspondent plus aux fichiers HMD :",
+      "relancer la preparation avant la calibration."
+    )
+  )
+  calibration_end <- cfg$simulation$calibration_end
+  assert_true(
+    calibration_end == cfg$validation_end,
+    "La calibration de simulation doit rester alignee sur la fin 2015."
+  )
+  training <- subset_training_data(processed, calibration_end)
+  target <- simulation_reference_target(processed, cfg)
+  context <- cfg$simulation$reference_fit_context
+  reference_cfg <- cfg
+  reference_cfg$forecast_draws <- cfg$simulation$reference_draws
+
+  force_draws <- setNames(vector("list", length(cfg$models)), cfg$models)
+  phi_draws <- setNames(vector("list", length(cfg$models)), cfg$models)
+  rate_summaries <- list()
+  phi_summaries <- list()
+  for (model in cfg$models) {
+    message_step(
+      "Reference HMD 1970-", calibration_end, " - ", toupper(model)
+    )
+    fit <- read_simulation_reference_fit(model, cfg, context)
+    model_seed <- stable_seed(
+      cfg$seed, cfg$profile, "simulation_reference_hmd", model
+    )
+    prediction <- forecast_model(
+      fit, model, training, target, reference_cfg,
+      keep_draws = TRUE,
+      seed = model_seed
+    )
+    posterior <- fit_draw_matrix(
+      fit,
+      ndraws = reference_cfg$forecast_draws,
+      seed = stable_seed(model_seed, model, "posterior_subset")
+    )
+    force_draws[[model]] <- prediction$force_draws
+    phi_draws[[model]] <- extract_scalar_parameter(posterior, "phi")
+    assert_true(
+      identical(dim(force_draws[[model]]), c(
+        reference_cfg$forecast_draws, nrow(target)
+      )),
+      paste("Dimensions predictives inattendues pour", model)
+    )
+    assert_true(
+      all(is.finite(force_draws[[model]]) & force_draws[[model]] > 0) &&
+        all(is.finite(phi_draws[[model]]) & phi_draws[[model]] > 0),
+      paste("Tirages predictifs invalides pour", model)
+    )
+    rate_summaries[[model]] <- data.frame(
+      model = model,
+      age = target$age,
+      horizon = target$horizon,
+      mean_force = colMeans(force_draws[[model]]),
+      q025_force = apply(
+        force_draws[[model]], 2L, stats::quantile,
+        probs = 0.025, names = FALSE
+      ),
+      q50_force = apply(
+        force_draws[[model]], 2L, stats::quantile,
+        probs = 0.50, names = FALSE
+      ),
+      q975_force = apply(
+        force_draws[[model]], 2L, stats::quantile,
+        probs = 0.975, names = FALSE
+      ),
+      stringsAsFactors = FALSE
+    )
+    phi_summaries[[model]] <- data.frame(
+      model = model,
+      mean_phi = mean(phi_draws[[model]]),
+      q025_phi = stats::quantile(
+        phi_draws[[model]], 0.025, names = FALSE
+      ),
+      q50_phi = stats::quantile(
+        phi_draws[[model]], 0.50, names = FALSE
+      ),
+      q975_phi = stats::quantile(
+        phi_draws[[model]], 0.975, names = FALSE
+      ),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  metadata <- data.frame(
+    protocol_version = cfg$simulation$protocol_version,
+    data_source = "Human Mortality Database",
+    country = processed$metadata$country,
+    sex = processed$metadata$sex,
+    calibration_years = paste0(cfg$year_start, "-", calibration_end),
+    ages = paste0(cfg$age_min, "-", cfg$age_max),
+    horizons = paste(range(cfg$lfo_horizons), collapse = "-"),
+    candidate_models = paste(cfg$models, collapse = ","),
+    fit_context = context,
+    posterior_predictive_draws = reference_cfg$forecast_draws,
+    observation_distribution = "negative_binomial_2",
+    exposure_construction = paste0(
+      "profil HMD observe en ",
+      cfg$simulation$exposure_reference_year,
+      " repete aux horizons 1-10"
+    ),
+    low_information_exposure_scale =
+      cfg$simulation$low_information_exposure_scale,
+    low_information_component_contraction =
+      cfg$simulation$low_information_component_contraction,
+    test_years_used_for_calibration = "aucune",
+    stringsAsFactors = FALSE
+  )
+  reference <- list(
+    protocol_version = cfg$simulation$protocol_version,
+    cache_key = simulation_reference_cache_key(cfg),
+    metadata = metadata,
+    target = target,
+    force_draws = force_draws,
+    phi_draws = phi_draws
+  )
+  reference_dir <- simulation_reference_dir(cfg)
+  dir.create(reference_dir, recursive = TRUE, showWarnings = FALSE)
+  save_rds_atomic(
+    reference, simulation_reference_path(cfg), compress = FALSE
+  )
+  write_csv_atomic(
+    metadata, file.path(reference_dir, "dgp_metadata.csv")
+  )
+  write_csv_atomic(
+    do.call(rbind, rate_summaries),
+    file.path(reference_dir, "candidate_force_summaries.csv")
+  )
+  write_csv_atomic(
+    do.call(rbind, phi_summaries),
+    file.path(reference_dir, "candidate_dispersion_summaries.csv")
+  )
+  reference
+}
+
+load_or_build_simulation_reference <- function(cfg) {
+  path <- simulation_reference_path(cfg)
+  expected_key <- simulation_reference_cache_key(cfg)
+  if (file.exists(path) && !force_recompute()) {
+    cached <- tryCatch(readRDS(path), error = function(error) NULL)
+    if (!is.null(cached) &&
+        identical(cached$protocol_version, cfg$simulation$protocol_version) &&
+        identical(cached$cache_key, expected_key)) {
+      message_step("Reference predictive HMD - resultat en cache")
+      return(cached)
+    }
+  }
+  build_simulation_reference(cfg)
+}
+
+simulation_predictive_components <- function(reference, scenario, cfg) {
+  force_draws <- reference$force_draws[cfg$models]
+  phi_draws <- reference$phi_draws[cfg$models]
+  if (scenario == "low_information") {
+    contraction <- cfg$simulation$low_information_component_contraction
+    assert_true(
+      is.finite(contraction) && contraction > 0 && contraction < 1,
+      "La contraction low_information doit appartenir a ]0,1[."
+    )
+    log_forces <- lapply(force_draws, log)
+    log_reference <- Reduce(`+`, log_forces) / length(log_forces)
+    force_draws <- lapply(
+      log_forces,
+      function(log_force) {
+        exp(log_reference + contraction * (log_force - log_reference))
+      }
+    )
+  }
+  list(force_draws = force_draws, phi_draws = phi_draws)
+}
+
+simulation_log_predictive_counts <- function(
+    deaths, exposure, force_draws, phi_draws) {
+  force_draws <- as.matrix(force_draws)
+  S <- nrow(force_draws)
+  N <- ncol(force_draws)
+  assert_true(length(deaths) == N, "Nombre de deces incompatible.")
+  assert_true(length(exposure) == N, "Nombre d'expositions incompatible.")
+  assert_true(length(phi_draws) == S, "Nombre de dispersions incompatible.")
+  means <- sweep(force_draws, 2L, exposure, `*`)
+  log_likelihood <- matrix(
+    stats::dnbinom(
+      rep(deaths, each = S),
+      mu = as.vector(means),
+      size = rep(phi_draws, times = N),
+      log = TRUE
+    ),
+    nrow = S,
+    ncol = N
+  )
+  apply(log_likelihood, 2L, log_mean_exp)
 }
 
 simulation_true_weights <- function(scenario, standardized, models) {
@@ -73,24 +380,51 @@ simulation_true_weights <- function(scenario, standardized, models) {
 }
 
 simulate_study_dataset <- function(
-    scenario, seed, cfg, constants = NULL) {
+    scenario, seed, cfg, reference, constants = NULL,
+    components = NULL) {
   grid <- simulation_grid(cfg)
   standardized <- standardize_context(grid, constants)
   data <- standardized$data
   constants <- standardized$constants
   true_weights <- simulation_true_weights(scenario, data, cfg$models)
-  signal_scale <- if (scenario == "low_information") 0.12 else 1
-  exposure <- if (scenario == "low_information") 5000 else 50000
-  dispersion <- if (scenario == "low_information") 55 else 150
-  log_rates <- t(mapply(
-    simulation_candidate_log_rates,
-    data$age,
-    data$horizon,
-    MoreArgs = list(models = cfg$models, signal_scale = signal_scale)
-  ))
-  colnames(log_rates) <- cfg$models
+  components <- components %||%
+    simulation_predictive_components(reference, scenario, cfg)
+  reference_key <- paste(reference$target$age, reference$target$horizon)
+  data_key <- paste(data$age, data$horizon)
+  reference_index <- match(data_key, reference_key)
+  assert_true(
+    !anyNA(reference_index),
+    "La grille de simulation differe de la reference predictive HMD."
+  )
+  exposure_scale <- if (scenario == "low_information") {
+    cfg$simulation$low_information_exposure_scale
+  } else {
+    1
+  }
+  data$exposure <-
+    reference$target$exposure[reference_index] * exposure_scale
+  data$origin <- as.integer(cfg$simulation$calibration_end)
+  data$year <- as.integer(data$origin + data$horizon)
+  data$omega <- 1
 
   set.seed(seed)
+  surface_rows <- setNames(vapply(
+    cfg$models,
+    function(model) sample.int(
+      nrow(components$force_draws[[model]]), 1L
+    ),
+    integer(1)
+  ), cfg$models)
+  generating_forces <- vapply(
+    cfg$models,
+    function(model) {
+      components$force_draws[[model]][
+        surface_rows[[model]], reference_index
+      ]
+    },
+    numeric(nrow(data))
+  )
+  colnames(generating_forces) <- cfg$models
   uniforms <- stats::runif(nrow(data))
   cumulative <- t(apply(true_weights, 1L, cumsum))
   selected <- 1L + rowSums(
@@ -98,30 +432,44 @@ simulate_study_dataset <- function(
       uniforms, nrow(data), length(cfg$models) - 1L
     ) > cumulative[, -length(cfg$models), drop = FALSE]
   )
-  mean_deaths <- exposure * exp(
-    log_rates[cbind(seq_len(nrow(data)), selected)]
+  selected_models <- cfg$models[selected]
+  selected_force <- generating_forces[
+    cbind(seq_len(nrow(data)), selected)
+  ]
+  selected_phi <- vapply(
+    seq_len(nrow(data)),
+    function(index) {
+      model <- selected_models[[index]]
+      components$phi_draws[[model]][surface_rows[[model]]]
+    },
+    numeric(1)
   )
+  mean_deaths <- data$exposure * selected_force
   data$deaths <- stats::rnbinom(
-    nrow(data), mu = mean_deaths, size = dispersion
+    nrow(data), mu = mean_deaths, size = selected_phi
   )
-  data$exposure <- exposure
-  data$origin <- 0L
-  data$year <- data$horizon
-  data$omega <- 1
   for (k in seq_along(cfg$models)) {
-    data[[paste0("log_p_", cfg$models[k])]] <- stats::dnbinom(
+    model <- cfg$models[[k]]
+    data[[paste0("log_p_", model)]] <-
+      simulation_log_predictive_counts(
       data$deaths,
-      mu = exposure * exp(log_rates[, k]),
-      size = dispersion,
-      log = TRUE
+      data$exposure,
+      components$force_draws[[model]][, reference_index, drop = FALSE],
+      components$phi_draws[[model]]
     )
   }
   list(
     data = data,
     constants = constants,
     true_weights = true_weights,
-    log_rates = log_rates,
-    dispersion = dispersion
+    predictive_force_draws = components$force_draws,
+    predictive_phi_draws = components$phi_draws,
+    generating_log_rates = log(generating_forces),
+    generating_phi = selected_phi,
+    selected_models = selected_models,
+    surface_draw_rows = surface_rows,
+    exposure_scale = exposure_scale,
+    reference_cache_key = reference$cache_key
   )
 }
 
@@ -153,7 +501,7 @@ simulation_repetition_dir <- function(
     "repetitions"
   }
   file.path(
-    cfg$paths$simulation,
+    simulation_output_root(cfg),
     repetition_root,
     scenario,
     sprintf("rep_%03d", repetition)
@@ -163,7 +511,7 @@ simulation_repetition_dir <- function(
 simulation_fit_context <- function(
     scenario, repetition, configuration, cohort = "main") {
   file.path(
-    "simulation_v3",
+    "simulation_v4_hmd",
     cohort,
     scenario,
     sprintf("rep_%03d", repetition),
@@ -514,6 +862,24 @@ simulation_select_models <- function(probabilities, uniforms) {
   )
 }
 
+simulation_draw_predictive_counts <- function(
+    test, cell, selected, models) {
+  counts <- numeric(length(selected))
+  for (model_index in unique(selected)) {
+    positions <- which(selected == model_index)
+    model <- models[[model_index]]
+    force <- test$predictive_force_draws[[model]]
+    phi <- test$predictive_phi_draws[[model]]
+    rows <- sample.int(nrow(force), length(positions), replace = TRUE)
+    counts[positions] <- stats::rnbinom(
+      length(positions),
+      mu = test$data$exposure[cell] * force[rows, cell],
+      size = phi[rows]
+    )
+  }
+  counts
+}
+
 simulation_evaluate_method <- function(
     test, scenario, repetition, method, models, predictive_draws,
     seed, deterministic_weights = NULL, posterior_weights = NULL) {
@@ -559,11 +925,8 @@ simulation_evaluate_method <- function(
         weights, stats::runif(predictive_draws)
       )
     }
-    predictive <- stats::rnbinom(
-      predictive_draws,
-      mu = test$data$exposure[cell] *
-        exp(test$log_rates[cell, selected]),
-      size = test$dispersion
+    predictive <- simulation_draw_predictive_counts(
+      test, cell, selected, models
     ) / test$data$exposure[cell]
     observed_rate <- test$data$deaths[cell] / test$data$exposure[cell]
     crps[cell] <- empirical_crps(predictive, observed_rate)
@@ -640,7 +1003,7 @@ simulation_bind_rows <- function(items, name) {
 run_simulation_repetition <- function(
     scenario, repetition, compiled_model, cfg,
     predictive_draws = cfg$simulation$predictive_draws,
-    cohort = "main") {
+    cohort = "main", reference = NULL) {
   repetition_dir <- simulation_repetition_dir(
     cfg, scenario, repetition, cohort
   )
@@ -669,12 +1032,16 @@ run_simulation_repetition <- function(
     "Simulation ", scenario, " repetition ", repetition,
     " - generation des donnees"
   )
+  reference <- reference %||% load_or_build_simulation_reference(cfg)
+  components <- simulation_predictive_components(reference, scenario, cfg)
   validation <- simulate_study_dataset(
     scenario,
     simulation_repetition_seed(
       cfg, scenario, repetition, "validation", cohort
     ),
-    cfg
+    cfg,
+    reference = reference,
+    components = components
   )
   test <- simulate_study_dataset(
     scenario,
@@ -682,7 +1049,9 @@ run_simulation_repetition <- function(
       cfg, scenario, repetition, "test", cohort
     ),
     cfg,
-    validation$constants
+    reference = reference,
+    constants = validation$constants,
+    components = components
   )
   grid <- simulation_grid(cfg)
   global <- fit_global_stacking(
@@ -699,8 +1068,49 @@ run_simulation_repetition <- function(
     cfg$simulation$multistarts,
     simulation_repetition_seed(
       cfg, scenario, repetition, "contextual", cohort
-    )
+    ),
+    allow_nonconvergence = TRUE
   )
+  contextual_converged <- identical(contextual$status, "converge")
+  contextual_status <- data.frame(
+    scenario = scenario,
+    repetition = repetition,
+    status = contextual$status,
+    error_message = contextual$error_message,
+    starts = nrow(contextual$optimization_diagnostics),
+    converged_starts = sum(
+      contextual$optimization_diagnostics$convergence == 0L &
+        is.finite(contextual$optimization_diagnostics$value)
+    ),
+    best_objective = min(
+      contextual$optimization_diagnostics$value,
+      na.rm = TRUE
+    ),
+    max_abs_parameter = max(
+      contextual$optimization_diagnostics$max_abs_parameter,
+      na.rm = TRUE
+    ),
+    minimum_gradient_norm = min(
+      contextual$optimization_diagnostics$gradient_norm,
+      na.rm = TRUE
+    ),
+    stringsAsFactors = FALSE
+  )
+  write_csv_atomic(
+    contextual_status,
+    file.path(repetition_dir, "contextual_optimization_status.csv")
+  )
+  write_csv_atomic(
+    contextual$optimization_diagnostics,
+    file.path(repetition_dir, "contextual_optimization_diagnostics.csv")
+  )
+  if (!contextual_converged) {
+    message_step(
+      "Simulation ", scenario, " repetition ", repetition,
+      " - stacking contextuel non regularise non convergent; ",
+      "poursuite du stacking global et hierarchique"
+    )
+  }
 
   attempts <- list()
   attempts[[1L]] <- simulation_attempt(
@@ -749,7 +1159,10 @@ run_simulation_repetition <- function(
       repetition = repetition,
       status = "echec_definitif",
       diagnostics = final_overview,
-      diagnostics_attempts = attempts_overview
+      diagnostics_attempts = attempts_overview,
+      contextual_optimization = contextual_status,
+      contextual_optimization_attempts =
+        contextual$optimization_diagnostics
     )
     save_rds_atomic(result, result_path, compress = FALSE)
     return(result)
@@ -791,15 +1204,18 @@ run_simulation_repetition <- function(
     standardize_context(grid, validation$constants)$data,
     cfg$models
   )
-  contextual_grid <- contextual_weight_grid(
-    grid, contextual, cfg$models, validation$constants
-  )
   weight_matrices <- list(
     stacking_global = constant_weight_matrix(
       global$weights, nrow(grid), cfg$models
-    ),
-    stacking_contextual = as.matrix(contextual_grid[cfg$models])
+    )
   )
+  if (contextual_converged) {
+    contextual_grid <- contextual_weight_grid(
+      grid, contextual, cfg$models, validation$constants
+    )
+    weight_matrices$stacking_contextual <-
+      as.matrix(contextual_grid[cfg$models])
+  }
   hierarchical_long <- simulation_weight_summary(
     weight_draws, grid, cfg$models, true_weights
   )
@@ -811,16 +1227,19 @@ run_simulation_repetition <- function(
       cfg$models,
       true_weights,
       "stacking_global"
-    ),
-    simulation_deterministic_weight_long(
-      weight_matrices$stacking_contextual,
-      grid,
-      cfg$models,
-      true_weights,
-      "stacking_contextual"
-    ),
-    hierarchical_long
+    )
   )
+  if (contextual_converged) {
+    weights_long[[length(weights_long) + 1L]] <-
+      simulation_deterministic_weight_long(
+        weight_matrices$stacking_contextual,
+        grid,
+        cfg$models,
+        true_weights,
+        "stacking_contextual"
+      )
+  }
+  weights_long[[length(weights_long) + 1L]] <- hierarchical_long
   weights_long <- do.call(rbind, weights_long)
   weights_long$scenario <- scenario
   weights_long$repetition <- repetition
@@ -909,6 +1328,9 @@ run_simulation_repetition <- function(
     configuration = selected$overview$configuration,
     diagnostics = final_overview,
     diagnostics_attempts = attempts_overview,
+    contextual_optimization = contextual_status,
+    contextual_optimization_attempts =
+      contextual$optimization_diagnostics,
     performance = performance,
     recovery = recovery,
     weights = weights_long,
@@ -959,10 +1381,16 @@ write_simulation_stage_results <- function(
     cfg, repetitions, scenarios, cohort = stage
   )
   assert_true(length(results) > 0L, "Aucun resultat de simulation.")
-  output_dir <- file.path(cfg$paths$simulation, stage)
+  output_dir <- file.path(simulation_output_root(cfg), stage)
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   diagnostics <- simulation_bind_rows(results, "diagnostics")
   attempts <- simulation_bind_rows(results, "diagnostics_attempts")
+  contextual_optimization <- simulation_bind_rows(
+    results, "contextual_optimization"
+  )
+  contextual_optimization_attempts <- simulation_bind_rows(
+    results, "contextual_optimization_attempts"
+  )
   performance <- simulation_bind_rows(results, "performance")
   recovery <- simulation_bind_rows(results, "recovery")
   weights <- simulation_bind_rows(results, "weights")
@@ -977,6 +1405,16 @@ write_simulation_stage_results <- function(
     attempts,
     file.path(output_dir, "diagnostics_all_attempts.csv")
   )
+  if (nrow(contextual_optimization)) {
+    write_csv_atomic(
+      contextual_optimization,
+      file.path(output_dir, "contextual_optimization_by_repetition.csv")
+    )
+    write_csv_atomic(
+      contextual_optimization_attempts,
+      file.path(output_dir, "contextual_optimization_all_attempts.csv")
+    )
+  }
   if (nrow(performance)) {
     write_csv_atomic(
       performance,
@@ -1053,6 +1491,8 @@ write_simulation_stage_results <- function(
     results = results,
     diagnostics = diagnostics,
     attempts = attempts,
+    contextual_optimization = contextual_optimization,
+    contextual_optimization_attempts = contextual_optimization_attempts,
     performance = performance,
     recovery = recovery,
     weights = weights,
@@ -1063,7 +1503,7 @@ write_simulation_stage_results <- function(
 }
 
 select_simulation_validation_repetitions <- function(cfg) {
-  main_dir <- file.path(cfg$paths$simulation, "main")
+  main_dir <- file.path(simulation_output_root(cfg), "main")
   diagnostics <- utils::read.csv(
     file.path(main_dir, "diagnostics_by_repetition.csv"),
     stringsAsFactors = FALSE
@@ -1227,9 +1667,9 @@ select_simulation_validation_repetitions <- function(cfg) {
 }
 
 run_simulation_validation_repetition <- function(
-    scenario, repetition, compiled_model, cfg) {
+    scenario, repetition, compiled_model, cfg, reference = NULL) {
   validation_dir <- file.path(
-    cfg$paths$simulation,
+    simulation_output_root(cfg),
     "validation",
     scenario,
     sprintf("rep_%03d", repetition)
@@ -1267,12 +1707,16 @@ run_simulation_validation_repetition <- function(
       scenario, repetition
     )
   )
+  reference <- reference %||% load_or_build_simulation_reference(cfg)
+  components <- simulation_predictive_components(reference, scenario, cfg)
   validation <- simulate_study_dataset(
     scenario,
     simulation_repetition_seed(
       cfg, scenario, repetition, "validation", cohort = "main"
     ),
-    cfg
+    cfg,
+    reference = reference,
+    components = components
   )
   test <- simulate_study_dataset(
     scenario,
@@ -1280,7 +1724,9 @@ run_simulation_validation_repetition <- function(
       cfg, scenario, repetition, "test", cohort = "main"
     ),
     cfg,
-    validation$constants
+    reference = reference,
+    constants = validation$constants,
+    components = components
   )
   attempts <- list(simulation_attempt(
     scenario,
@@ -1502,9 +1948,11 @@ run_simulation_validation_repetition <- function(
   result
 }
 
-run_simulation_validation <- function(cfg, compiled_model) {
+run_simulation_validation <- function(
+    cfg, compiled_model, reference = NULL) {
+  reference <- reference %||% load_or_build_simulation_reference(cfg)
   selection <- select_simulation_validation_repetitions(cfg)
-  validation_root <- file.path(cfg$paths$simulation, "validation")
+  validation_root <- file.path(simulation_output_root(cfg), "validation")
   dir.create(validation_root, recursive = TRUE, showWarnings = FALSE)
   write_csv_atomic(
     selection, file.path(validation_root, "selection.csv")
@@ -1514,7 +1962,8 @@ run_simulation_validation <- function(cfg, compiled_model) {
       selection$scenario[index],
       selection$repetition[index],
       compiled_model,
-      cfg
+      cfg,
+      reference = reference
     )
   })
   diagnostics <- simulation_bind_rows(results, "diagnostics")
@@ -1623,7 +2072,7 @@ run_simulation_validation <- function(cfg, compiled_model) {
 }
 
 summarize_simulation_main_results <- function(cfg) {
-  main_dir <- file.path(cfg$paths$simulation, "main")
+  main_dir <- file.path(simulation_output_root(cfg), "main")
   performance <- utils::read.csv(
     file.path(main_dir, "performance_by_repetition.csv"),
     stringsAsFactors = FALSE
@@ -1713,15 +2162,17 @@ summarize_simulation_main_results <- function(cfg) {
 
   write_csv_atomic(
     performance_summary,
-    file.path(cfg$paths$simulation, "simulation_summary.csv")
+    file.path(simulation_output_root(cfg), "simulation_summary.csv")
   )
   write_csv_atomic(
     recovery_summary,
-    file.path(cfg$paths$simulation, "simulation_weight_recovery.csv")
+    file.path(
+      simulation_output_root(cfg), "simulation_weight_recovery.csv"
+    )
   )
   write_csv_atomic(
     diagnostics,
-    file.path(cfg$paths$simulation, "simulation_diagnostics.csv")
+    file.path(simulation_output_root(cfg), "simulation_diagnostics.csv")
   )
   write_csv_atomic(
     surface_summary[
@@ -1729,7 +2180,7 @@ summarize_simulation_main_results <- function(cfg) {
       drop = FALSE
     ],
     file.path(
-      cfg$paths$simulation,
+      simulation_output_root(cfg),
       "simulation_hierarchical_weights.csv"
     )
   )
@@ -1740,7 +2191,7 @@ summarize_simulation_main_results <- function(cfg) {
       diagnostics = diagnostics,
       surfaces = surface_summary
     ),
-    file.path(cfg$paths$simulation, "simulation_results.rds"),
+    file.path(simulation_output_root(cfg), "simulation_results.rds"),
     compress = FALSE
   )
 

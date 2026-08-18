@@ -1,5 +1,0 @@
-"scenario","repetitions_planned","repetitions_completed","repetitions_valid","reestimations","final_failures","total_elapsed_seconds"
-"constant_weights",30,30,30,2,0,9804.28300237656
-"horizon_only",30,30,30,3,0,9441.55050086975
-"age_horizon",30,30,30,5,0,14584.6390109062
-"low_information",30,30,30,0,0,6766.93452453613

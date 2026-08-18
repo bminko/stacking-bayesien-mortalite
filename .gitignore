@@ -1,51 +1,21 @@
-# Données HMD brutes
-data/raw/
+# Local R state and project library
+.Rhistory
+.RData
+.Rproj.user/
+R/library/
+
+# HMD source files are licensed and must be downloaded by each user
 death.txt
 exposure.txt
 
-# Configuration locale
-config/paths_local.R
-.Renviron
-.Rprofile
-.Rhistory
-
-# Bibliothèque et état R
-R/library/
-renv/library/
-renv/staging/
-.Rproj.user/
-*.RData
-*.rds
-*.RDS
-
-# Sorties volumineuses ou régénérables
-results/full/
-results/smoke/
-results/**/MCMC_draws/
-results/**/repetitions/
-results/**/pilot_repetitions/
-results/**/weights_by_repetition.csv
-*.tmp
+# Generated data, fits and reports
+data/processed/
+results/
+output/
+tmp/
 *.log
 
-# Compilation Stan et LaTeX
-*.exe
-*.o
-*.obj
-*.hpp.gch
-*.aux
-*.bbl
-*.bcf
-*.blg
-*.lof
-*.lot
-*.out
-*.run.xml
-*.synctex.gz
-*.toc
-
-# Système et éditeurs
-Thumbs.db
-.DS_Store
-*.swp
-*~
+# Compiled Stan artefacts
+stan/*.rds
+stan/*.exe
+stan/*.hpp
