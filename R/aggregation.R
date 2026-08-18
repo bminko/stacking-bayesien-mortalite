@@ -196,7 +196,8 @@ contextual_stacking_gradient <- function(theta, log_p, X, omega) {
 
 fit_contextual_stacking <- function(
     meta, models, multistarts = 12L, seed = 1L,
-    design_columns = c("age", "age2", "horizon", "age_horizon")) {
+    design_columns = c("age", "age2", "horizon", "age_horizon"),
+    allow_nonconvergence = FALSE) {
   log_p <- meta_logp_matrix(meta, models)
   X <- context_design_matrix(meta, design_columns)
   omega <- meta$omega %||% rep(1, nrow(meta))
@@ -227,15 +228,56 @@ fit_contextual_stacking <- function(
     )
   })
   values <- vapply(fits, `[[`, numeric(1), "value")
+  optimization_diagnostics <- do.call(rbind, lapply(
+    seq_along(fits),
+    function(index) {
+      fit <- fits[[index]]
+      gradient_norm <- tryCatch(
+        sqrt(sum(gradient(fit$par)^2)),
+        error = function(error) NA_real_
+      )
+      data.frame(
+        start = index,
+        convergence = fit$convergence,
+        value = fit$value,
+        function_evaluations = unname(fit$counts[["function"]]),
+        gradient_evaluations = unname(fit$counts[["gradient"]]),
+        message = fit$message %||% "",
+        max_abs_parameter = max(abs(fit$par)),
+        gradient_norm = gradient_norm,
+        stringsAsFactors = FALSE
+      )
+    }
+  ))
+  converged <- vapply(
+    fits,
+    function(fit) identical(fit$convergence, 0L) && is.finite(fit$value),
+    logical(1)
+  )
+  if (!any(converged) && isTRUE(allow_nonconvergence)) {
+    return(list(
+      status = "echec_non_convergence",
+      error_message =
+        "Aucune optimisation convergente pour stacking contextuel",
+      coefficients = NULL,
+      design_columns = design_columns,
+      optimization = NULL,
+      all_values = values,
+      optimization_diagnostics = optimization_diagnostics
+    ))
+  }
   best <- select_best_optimization(fits, "stacking contextuel")
   coefficients <- unpack_context_theta(best$par, K, P)
   rownames(coefficients) <- models[seq_len(K - 1L)]
   colnames(coefficients) <- c("intercept", design_columns)
   list(
+    status = "converge",
+    error_message = "",
     coefficients = coefficients,
     design_columns = design_columns,
     optimization = best,
-    all_values = values
+    all_values = values,
+    optimization_diagnostics = optimization_diagnostics
   )
 }
 

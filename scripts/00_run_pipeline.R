@@ -1,6 +1,7 @@
 #!/usr/bin/env Rscript
 
-# Lance les douze etapes dans des processus R separes.
+# Lance les six etapes empiriques dans des processus R separes.
+# L'etude de simulation (etape 07) se lance explicitement avec --stage.
 
 source(file.path("R", "utils.R"))
 args <- commandArgs(trailingOnly = TRUE)
@@ -8,7 +9,7 @@ profile <- parse_profile_argument(args)
 Sys.setenv(MEMOIRE_PROFILE = profile)
 
 steps_argument <- grep("^--steps=", args, value = TRUE)
-default_steps <- sprintf("%02d", 1:12)
+default_steps <- sprintf("%02d", 1:6)
 steps <- if (length(steps_argument)) {
   strsplit(sub("^--steps=", "", steps_argument[[1L]]), ",")[[1L]]
 } else {
@@ -22,13 +23,7 @@ scripts <- c(
   "03" = "scripts/03_lfo_validation_loop.R",
   "04" = "scripts/04_fit_aggregation_methods.R",
   "05" = "scripts/05_evaluate_test_metrics.R",
-  "06" = "scripts/06_actuarial_quantities.R",
-  "07" = "scripts/07_simulation_study.R",
-  "08" = "scripts/08_prepare_chapter3_results.R",
-  "09" = "scripts/09_generate_chapter3_latex_tables.R",
-  "10" = "scripts/10_prepare_chapter3_spec_results.R",
-  "11" = "scripts/11_prediction_mc_stability.R",
-  "12" = "scripts/12_generate_spec_latex_tables.R"
+  "06" = "scripts/06_actuarial_quantities.R"
 )
 unknown <- setdiff(steps, names(scripts))
 assert_true(!length(unknown), paste(

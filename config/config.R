@@ -3,32 +3,12 @@
 # Le profil "full" correspond a l'analyse definitive. Le profil "smoke"
 # conserve les ages 50-90 et le debut en 1970, mais reduit le cout de calcul.
 
-minkos_config <- function(profile = Sys.getenv("MEMOIRE_PROFILE", "full"),
-                          root = find_project_root()) {
+mortality_stacking_config <- function(
+    profile = Sys.getenv("MEMOIRE_PROFILE", "full"),
+    root = find_project_root()) {
   profile <- tolower(profile)
   if (!profile %in% c("full", "smoke")) {
     stop("Profil inconnu : ", profile, ". Utiliser 'full' ou 'smoke'.")
-  }
-  local_paths <- list()
-  local_paths_file <- file.path(root, "config", "paths_local.R")
-  if (file.exists(local_paths_file)) {
-    local_environment <- new.env(parent = baseenv())
-    sys.source(local_paths_file, envir = local_environment)
-    if (exists("paths_local", envir = local_environment, inherits = FALSE)) {
-      local_paths <- get(
-        "paths_local", envir = local_environment, inherits = FALSE
-      )
-    }
-  }
-  deaths_path <- if (!is.null(local_paths$deaths)) {
-    local_paths$deaths
-  } else {
-    file.path(root, "data", "raw", "death.txt")
-  }
-  exposure_path <- if (!is.null(local_paths$exposure)) {
-    local_paths$exposure
-  } else {
-    file.path(root, "data", "raw", "exposure.txt")
   }
 
   cfg <- list(
@@ -91,7 +71,16 @@ minkos_config <- function(profile = Sys.getenv("MEMOIRE_PROFILE", "full"),
       max_retries = 1L
     ),
     simulation = list(
-      protocol_version = "stan_independent_repetitions_v3",
+      # Version 4 : les distributions candidates du DGP proviennent des cinq
+      # modeles ajustes une seule fois aux donnees HMD belges 1970-2015.
+      protocol_version = "stan_hmd_calibrated_repetitions_v4",
+      output_subdir = "hmd_calibrated_v4",
+      reference_fit_context = "test_training_2015",
+      calibration_end = 2015L,
+      exposure_reference_year = 2015L,
+      reference_draws = 1000L,
+      low_information_exposure_scale = 0.10,
+      low_information_component_contraction = 0.25,
       scenarios = c(
         "constant_weights",
         "horizon_only",
@@ -200,8 +189,8 @@ minkos_config <- function(profile = Sys.getenv("MEMOIRE_PROFILE", "full"),
 
   profile_root <- file.path(root, "results", profile)
   cfg$paths <- list(
-    deaths = deaths_path,
-    exposure = exposure_path,
+    deaths = file.path(root, "death.txt"),
+    exposure = file.path(root, "exposure.txt"),
     processed = file.path(root, "data", "processed", profile),
     results = profile_root,
     fits = file.path(profile_root, "MCMC_draws"),

@@ -18,10 +18,7 @@ find_project_root <- function(start = getwd()) {
       file.path(current, "config", "config.R"),
       file.path(current, "scripts", "00_run_pipeline.R")
     )
-    legacy_marker <- file.path(
-      current, "Plan_de_travail_Memoire_Minko.md"
-    )
-    if (all(file.exists(code_markers)) || file.exists(legacy_marker)) {
+    if (all(file.exists(code_markers))) {
       return(current)
     }
     parent <- dirname(current)
@@ -37,7 +34,7 @@ load_config <- function(profile = Sys.getenv("MEMOIRE_PROFILE", "full")) {
   activate_project_library(root)
   env <- new.env(parent = environment())
   sys.source(file.path(root, "config", "config.R"), envir = env)
-  cfg <- env$minkos_config(profile = profile, root = root)
+  cfg <- env$mortality_stacking_config(profile = profile, root = root)
   ensure_project_dirs(cfg)
   cfg
 }
